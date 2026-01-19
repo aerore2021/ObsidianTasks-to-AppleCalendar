@@ -7,16 +7,22 @@ Obsidian Tasks 导出脚本
 
 import os
 import re
+import subprocess
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import argparse
 
 # 配置
 VAULT_PATH = "/Users/hqb/Library/Mobile Documents/iCloud~md~obsidian/Documents/Keitsii"
-# 输出到本地目录（因为 launchd 无法写入 iCloud Drive）
+# 输出到本地目录
 ICS_OUTPUT_PATH = "/Users/hqb/.iflow-tasks-calendar/tasks_calendar.ics"
-# iCloud 中的符号链接目标
-ICS_ICLOUD_LINK = os.path.join(VAULT_PATH, "tasks_calendar.ics")
+# iCloud 中的实际文件(复制)
+ICS_ICLOUD_COPY = os.path.join(VAULT_PATH, "tasks_calendar.ics")
+# 日历仓库路径
+CALENDAR_REPO_PATH = "/Users/hqb/.iflow-tasks-calendar/MyObsidianCalendar"
+# 日历仓库中的文件路径
+CALENDAR_REPO_FILE = os.path.join(CALENDAR_REPO_PATH, "tasks_calendar.ics")
 
 # 指定要导出的任务文件
 TASK_FILES = [
@@ -227,19 +233,54 @@ def generate_ics(tasks, output_path):
     
     print(f"✅ 已导出 {exported_count} 个未完成任务到 {output_path}")
     
-    # 创建符号链接到 iCloud
+    # 复制文件到 iCloud
     try:
-        if os.path.exists(ICS_ICLOUD_LINK):
-            os.remove(ICS_ICLOUD_LINK)
-        os.symlink(output_path, ICS_ICLOUD_LINK)
-        print(f"🔗 已创建符号链接: {ICS_ICLOUD_LINK}")
+        shutil.copy2(output_path, ICS_ICLOUD_COPY)
+        print(f"📋 已复制到 iCloud: {ICS_ICLOUD_COPY}")
     except Exception as e:
-        print(f"⚠️  无法创建符号链接: {e}")
+        print(f"⚠️  无法复制到 iCloud: {e}")
+
+def git_push_to_calendar_repo():
+    """将 .ics 文件提交并推送到日历仓库"""
+    try:
+        # 复制文件到日历仓库
+        shutil.copy2(ICS_OUTPUT_PATH, CALENDAR_REPO_FILE)
+        print(f"📋 已复制到日历仓库: {CALENDAR_REPO_FILE}")
+        
+        # 进入日历仓库
+        os.chdir(CALENDAR_REPO_PATH)
+        
+        # 检查是否有 changes
+        result = subprocess.run(['git', 'status', '--porcelain'], 
+                              capture_output=True, text=True)
+        
+        if 'tasks_calendar.ics' not in result.stdout:
+            print("ℹ️  .ics 文件无变化，跳过提交")
+            return
+        
+        # 添加文件
+        subprocess.run(['git', 'add', 'tasks_calendar.ics'], check=True)
+        print("✅ 已添加 tasks_calendar.ics 到暂存区")
+        
+        # 提交
+        commit_msg = f"Update tasks calendar - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        subprocess.run(['git', 'commit', '-m', commit_msg], check=True)
+        print(f"✅ 已提交: {commit_msg}")
+        
+        # 推送
+        subprocess.run(['git', 'push'], check=True)
+        print("🚀 已推送到 GitHub 日历仓库")
+        
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Git 操作失败: {e}")
+    except Exception as e:
+        print(f"❌ 推送到日历仓库时出错: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description='导出 Obsidian Tasks 到 iCalendar')
     parser.add_argument('--vault', default=VAULT_PATH, help='Obsidian vault 路径')
     parser.add_argument('--output', default=ICS_OUTPUT_PATH, help='输出 .ics 文件路径')
+    parser.add_argument('--no-push', action='store_true', help='不推送到 GitHub')
     
     args = parser.parse_args()
     
@@ -256,6 +297,11 @@ def main():
     print(f"📋 未完成且有截止日期: {incomplete_with_due}")
     
     generate_ics(tasks, args.output)
+    
+    # 推送到 GitHub 日历仓库
+    if not args.no_push:
+        print("\n📤 推送到 GitHub 日历仓库...")
+        git_push_to_calendar_repo()
 
 if __name__ == '__main__':
     main()
